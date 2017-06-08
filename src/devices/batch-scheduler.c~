@@ -1,0 +1,254 @@
+/* Tests cetegorical mutual exclusion with different numbers of threads.
+ * Automatic checks only catch severe problems like crashes.
+ */
+#include <stdio.h>
+#include "tests/threads/tests.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
+#include "threads/thread.h"
+#include "lib/random.h" //generate random numbers
+
+#define BUS_CAPACITY 3
+#define SENDER 0
+#define RECEIVER 1
+#define NORMAL 0
+#define HIGH 1
+
+
+struct semaphore bus_slot;
+struct semaphore sender_low_prio;
+struct semaphore sender_high_prio;
+struct semaphore receiver_low_prio;
+struct semaphore receiver_high_prio;
+struct semaphore direction;
+struct lock bus_direction;
+static int bus_dir;
+static int num_sender_prio;
+static int num_receiver_prio;
+void set_direction(int dir);
+void update_high_prio(struct semaphore *, int , struct semaphore *);
+
+/*
+ *	initialize task with direction and priority
+ *	call o
+ * */
+typedef struct {
+	int direction;
+	int priority;
+} task_t;
+
+void batchScheduler(unsigned int num_tasks_send, unsigned int num_task_receive,
+        unsigned int num_priority_send, unsigned int num_priority_receive);
+
+void senderTask(void *);
+void receiverTask(void *);
+void senderPriorityTask(void *);
+void receiverPriorityTask(void *);
+void init_bus(void);
+
+void oneTask(task_t task);/*Task requires to use the bus and executes methods below*/
+	void getSlot(task_t task); /* task tries to use slot on the bus */
+	void transferData(task_t task); /* task processes data on the bus either sending or receiving based on the direction*/
+	void leaveSlot(task_t task); /* task release the slot */
+
+
+
+/* initializes semaphores */ 
+void init_bus(void){ 
+ 
+    random_init((unsigned int)123456789); 
+    
+    
+    sema_init(&bus_slot,BUS_CAPACITY);
+    
+    /* high priority first */
+    sema_init(&sender_high_prio, 1);
+    sema_init(&receiver_high_prio, 1);
+
+    sema_init(&sender_low_prio, 1);
+    sema_down(&sender_low_prio);
+    sema_init(&receiver_low_prio, 1);
+    sema_down(&receiver_low_prio);
+
+    lock_init(&bus_direction);
+    sema_init(&direction, 1);
+    num_sender_prio = 0;
+    num_receiver_prio = 0;
+    bus_dir = -1;
+
+}
+
+/*
+ *  Creates a memory bus sub-system  with num_tasks_send + num_priority_send
+ *  sending data to the accelerator and num_task_receive + num_priority_receive tasks
+ *  reading data/results from the accelerator.
+ *
+ *  Every task is represented by its own thread. 
+ *  Task requires and gets slot on bus system (1)
+ *  process data and the bus (2)
+ *  Leave the bus (3).
+ */
+
+void batchScheduler(unsigned int num_tasks_send, unsigned int num_task_receive,
+        unsigned int num_priority_send, unsigned int num_priority_receive)
+{
+    // we run high prio in critical sections, since they are shared variables.
+    // note that we add more tasks instead of reassgning priority tasks, some tasks maight not be completed yet 
+    sema_down(&sender_high_prio);   
+    num_sender_prio  +=  num_priority_send;
+    sema_up(&sender_high_prio);
+
+    
+    sema_down(&receiver_high_prio);
+    num_receiver_prio += num_priority_receive;
+    sema_up(&receiver_high_prio);
+    
+    sema_down(&sender_high_prio);
+    if(num_sender_prio == 0){
+       sema_up(&sender_low_prio);
+    }
+    sema_up(&sender_high_prio);
+
+    sema_down(&receiver_high_prio);
+    if(num_receiver_prio == 0){
+       sema_up(&receiver_low_prio);
+    }
+    sema_up(&receiver_high_prio);
+
+
+    unsigned int i;
+    for(i = 0; i < num_priority_send; i++){
+       thread_create("sender_high_prio", PRI_MAX, &senderPriorityTask, NULL);
+    }
+
+
+    for(i = 0; i < num_priority_receive; i++){
+       thread_create("receiver_high_prio", PRI_MAX, &receiverPriorityTask, NULL);
+    }
+  
+    for(i=0; i < num_tasks_send; i++){
+       thread_create("sender_low_prio", PRI_MIN, &senderTask, NULL);
+    }
+
+    for(i=0; i < num_task_receive; i++){
+       thread_create("receiver_low_prio", PRI_MIN, &receiverTask, NULL);
+    }
+
+
+
+      
+
+}
+
+/* Normal task,  sending data to the accelerator */
+void senderTask(void *aux UNUSED){
+        task_t task = {SENDER, NORMAL};
+        oneTask(task);
+}
+
+/* High priority task, sending data to the accelerator */
+void senderPriorityTask(void *aux UNUSED){
+        task_t task = {SENDER, HIGH};
+        oneTask(task);
+}
+
+/* Normal task, reading data from the accelerator */
+void receiverTask(void *aux UNUSED){
+        task_t task = {RECEIVER, NORMAL};
+        oneTask(task);
+}
+
+/* High priority task, reading data from the accelerator */
+void receiverPriorityTask(void *aux UNUSED){
+        task_t task = {RECEIVER, HIGH};
+        oneTask(task);
+}
+
+/* abstract task execution*/
+void oneTask(task_t task) {
+  getSlot(task);
+  transferData(task);
+  leaveSlot(task);
+}
+
+
+
+void update_high_prio(struct semaphore * high_sema, int high_prio, struct semaphore * low_sema){
+   sema_down(high_sema);
+   high_prio--;
+   sema_up(high_sema);
+   if(high_prio == 0){
+      sema_up(low_sema);
+   }
+}
+
+
+/* task tries to get slot on the bus subsystem */
+void getSlot(task_t task) 
+{
+    if(bus_dir != task.direction && bus_slot.value < BUS_CAPACITY){
+        sema_down(&direction);
+     }
+
+     if(bus_dir != task.direction){
+           set_direction(SENDER);
+     }
+     if(task.direction == SENDER){     
+        if(task.priority == HIGH){
+           sema_down(&bus_slot);
+           update_high_prio(&sender_high_prio, num_sender_prio, &sender_low_prio);
+        
+        }else{
+      	   sema_down(&sender_low_prio);
+           sema_down(&bus_slot);
+           sema_up(&sender_low_prio);
+      	}
+
+     /* if receiver receives tasks*/
+     }else{
+        if(bus_dir != task.direction){
+          set_direction(RECEIVER);
+       }
+        if(task.priority == HIGH){
+           sema_down(&bus_slot);
+           update_high_prio(&receiver_high_prio, num_receiver_prio, &receiver_low_prio);
+
+        }else{
+           sema_down(&receiver_low_prio);
+           sema_down(&bus_slot);
+           sema_up(&receiver_low_prio);
+        }
+
+       
+     }  
+    
+
+}
+
+
+
+/* task processes data on the bus send/receive */
+void transferData(task_t task) 
+{
+    timer_sleep((int64_t)random_ulong() % 15);
+}
+
+
+
+/* task releases the slot */
+void leaveSlot(task_t task) 
+{
+    sema_up(&bus_slot);
+    if(bus_slot.value == BUS_CAPACITY){
+       sema_up(&direction);
+    }
+
+}
+
+
+void set_direction(int dir){
+   lock_acquire(&bus_direction);
+   bus_dir = dir;
+   lock_release(&bus_direction);
+}
+

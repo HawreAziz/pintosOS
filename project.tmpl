@@ -1,0 +1,198 @@
+			+--------------------+
+			|    EDA092/DIT400   |
+			| LAB ASSIGNMENT 2:  |
+			| 	THREADS      |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP B4 ----
+
+>> Fill in the group number, names and email addresses of your group members.
+
+Hawre Aziz <gusazizha@student.gu.se>
+Michael Dragomir <gusdragmi@student.gu.se>
+
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+ANSWER:
+
+int64_t blocking_time in struct thread in thread.h : time duration, how long a thread is blocked depends on blocking_time
+
+
+static void time_to_wakeup(struct thread *, void *): this decreases the blocking_time of blocked threads, and checks if a thread is ready to unblock, if yes it unblocks the thread. The function in passed into foreach function, of course the function is called when an interrupt occurs.
+
+
+
+ 
+
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+ANSWER:
+
+First of all we check that interrupt is on, if not assert fails. 
+Then we check ticks passed into the function if 0 return meaning that it is ready to wakeup 
+else blocking time of current thread is now ticks and 
+disable interrupt 
+block current thread 
+enable interrupt	
+and the thread is put into blocking threads until it is ready to wakeup
+
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+
+ANSWER: In our timer_interrupt() method we are using thread_foreach() to check each thread, the function we send is time_to_wakeup function
+which will just check if the thread should wake up or not. Of course we decrement its blocking time each time in time_to_wakeup function, that minimizes the time in timer interrupt handler.
+
+
+
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+ANSWER:
+
+In timer_sleep we give each thread its blocking time blocking_time (time in which a thread is blocked). Then thread is blocked until it is its turn to wake up.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+ANSWER: Before blocking a thread interrupt is on, when we call timer_sleep we disable interrupt and call block(), block here is critical section.
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+ANSWER: We thought this code was using the minimal row of code. And we didnt use so many interrupts.
+
+			    BATCH SCHEDULING
+			    ================
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, semaphore, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+struct semaphore bus_slot; - Make sure that max available slots is 3. And only one task at time.
+struct semaphore bus_slot; - Make sure that max available slots is 3. And only one task at time.
+struct semaphore sender_low_prio; - Mutex to make sure that critical code segement is only accessed by one thread of sender low prio at a time.
+struct semaphore sender_high_prio; - Mutex to make sure that critical code segement is only accessed by one thread of sender high prio at a time.
+struct semaphore receiver_low_prio; - Mutex to make sure that critical code segement is only accessed by one thread of revceiver low prio at a time.
+struct semaphore receiver_high_prio; - Mutex to make sure that critical code segement is only accessed by one thread of revceiver high prio at a time.
+struct semaphore direction; - Mutex to ensure there is just one direction at time. Locking the direction so no threads can access from other side.
+struct lock bus_direction; - Mutex to ensure there is just one direction at time. Locking the direction so no threads can access from other side.
+static int bus_dir; -  The current direction of bus
+static int num_sender_prio; - Keeps track of the sender's priority 
+static int num_receiver_prio; - Keeps track of the recievers priority
+
+---- SYNCHRONIZATION ----
+
+>> C1: How does your solution guarantee that no more that 3 tasks
+>> are using the bus in the same direction?
+
+ANSWER: 
+
+So here the first thing we do when a task tries to enter is:
+1) aquire the semaphore.
+2) Check if there is any space left in the stack.
+3) If there is space, take a place in the stack else it will put itself in a queue of waiting tasks.
+
+
+>> C2: What prevents tasks from opposite directions from using the
+>> bus simultaneously?
+
+ANSWER:
+First of alll we have direction this sema is acquired by only one direction. Then we have bus_slot semaphore, this semaphore makes sure that no more than 3 threads are using the bus. Of course all of the 3 from the same direction, since direction can only be acquired by on direction at the same time. direction makes threads wait until it is right for that thread to acquire direction. And bus_slot makes sure that only 3 tasks of the same direction get slot.  
+
+
+
+>> C3: How does your solution grant priority to high priority tasks over
+>> the waiting tasks in the same direction?
+
+ANSWER:
+Accoriding to the task, we let 3 tasks to get through the bus from each direction, and this is guaranteed by bus_slot semaphore, if a task with higher priority comes in, we let it to get a slot on the bus directly without waiting, unlike task for low priority which has to wait for receiver/sender low_prio (which already got a slot on the bus) and then tries to get a slot on the bus, update function_high_prio update number of high priority tasks. 
+
+
+>> C4: How do you guarantee that despite having priority, high priority
+>> tasks do not start using the bus while there are still still using
+>> it in the oposite direction?
+
+ANSWER:
+As mentioned before once direction semaphore is aquired, the opposite direction despite high/low has to wait. When a high priority comes in it waits at sema_down(&direction), since it is acquired by tasks from opposite side. Of course when direction is acquired the bus_slot is busy by tasks from that direction, and it can not be by taks from opposite direction.
+
+---- RATIONALE ----
+
+>> C6: Why did you choose this design? Did you consider other design 
+>> alternatives? In what ways is it superior to another design you considered?
+
+ANSWER:
+sema bus_slot to make sure that no more than 3 tasks are using the bus.
+semaphore sender_low_prio: to see if there are sender low prio remaining
+semaphore sender_high_prio; checks if there are sender high prio reamining
+
+semaphore receiver_low_prio: checks if there are receiver low pro remaining
+
+semaphore receiver_high_prio: checks if there are rceiver high prio  
+
+semaphore direction: makes thread wait, until the direction is ready for the thread. 
+
+lock bus_direction: prevents race-condiction for variable bus_dir.
+	 
+int bus_dir: This is the direcion of the bus.
+
+int num_sender_prio: number of sender high_prio
+
+int num_receiver_prio: number of receiver high prio
+
+
+
+May be we could do it less semaphores/locks and condition variables. But we found it hard to implement it. We tried to do it with 2 locks and 2 semaphores and a condition variable, but we failed. Finally we solved it by 6 semaphores and a lock and some shared variables. We think this is the best solution. 
+
+
+			   SURVEY QUESTIONS (optional)
+			   ===========================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters?
+
+>> Any other comments?
